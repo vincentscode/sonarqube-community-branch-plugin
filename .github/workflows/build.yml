@@ -28,7 +28,7 @@ jobs:
         run: |
           VERSION=$(grep "version" gradle.properties | cut -d'=' -f2)
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          if [[ $VERSION =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+          if [[ $VERSION =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}-vincentscode$ ]]; then
             echo "release=true" >> $GITHUB_OUTPUT
           else
             echo "release=false" >> $GITHUB_OUTPUT
@@ -148,9 +148,14 @@ jobs:
         name: Release
         if: success()
         run: |
+          RELEASE_VERSION=${{ needs.prep.outputs.version }}
+          BASE=$(echo $RELEASE_VERSION | sed 's/-vincentscode//')
+          NEXT_PATCH=$(( $(echo $BASE | cut -d. -f3) + 1 ))
+          NEXT_VERSION="$(echo $BASE | cut -d. -f1).$(echo $BASE | cut -d. -f2).${NEXT_PATCH}-vincentscode-SNAPSHOT"
           ./gradlew clean release \
             -Prelease.useAutomaticVersion=true \
-            -Prelease.releaseVersion=${{ needs.prep.outputs.version }}
+            -Prelease.releaseVersion=$RELEASE_VERSION \
+            -Prelease.newVersion=$NEXT_VERSION
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       -
@@ -179,6 +184,39 @@ jobs:
             build/ui/sonarqube-webapp.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker:
+    needs: [prep, release]
+    if: github.event_name != 'pull_request' && needs.prep.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prep.outputs.version }}
+          submodules: true
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      -
+        name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      -
+        name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            PLUGIN_VERSION=${{ needs.prep.outputs.version }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/sonarqube-with-community-branch-plugin:${{ needs.prep.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/sonarqube-with-community-branch-plugin:latest
 
   sonar:
     needs: prep
