@@ -84,8 +84,9 @@ class SetGitlabBindingActionTest {
         SetGitlabBindingAction testCase = new SetGitlabBindingAction(dbClient, componentFinder, userSession);
         ProjectAlmSettingDto result = testCase.createProjectAlmSettingDto("projectUuid", "settingsUuid", true, request);
 
-        assertThat(result).usingRecursiveComparison().isEqualTo(new ProjectAlmSettingDto().setProjectUuid("projectUuid").setAlmSettingUuid("settingsUuid").setAlmRepo("repositoryId").setMonorepo(true));
+        assertThat(result).usingRecursiveComparison().isEqualTo(new ProjectAlmSettingDto().setProjectUuid("projectUuid").setAlmSettingUuid("settingsUuid").setAlmRepo("repositoryId").setMonorepo(true).setInlineAnnotationsEnabled(false));
         verify(request).param("repository");
+        verify(request).paramAsBoolean("inlineAnnotationsEnabled");
         verifyNoMoreInteractions(request);
     }
 }
