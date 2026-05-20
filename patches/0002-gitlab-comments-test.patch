@@ -1,0 +1,21 @@
+From 20b3a19b2956e6d86c4ec842ba69d5109ebffaa1 Mon Sep 17 00:00:00 2001
+From: Vincent Schmandt <vincentscode@gmail.com>
+Date: Wed, 20 May 2026 12:44:54 +0200
+Subject: [PATCH] Fix GitlabMergeRequestDecoratorTest
+
+---
+ .../ce/pullrequest/gitlab/GitlabMergeRequestDecoratorTest.java   | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/test/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecoratorTest.java b/src/test/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecoratorTest.java
+index 4e1c9fa3..1903da4f 100644
+--- a/src/test/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecoratorTest.java
++++ b/src/test/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecoratorTest.java
+@@ -112,6 +112,7 @@ void setUp() throws IOException {
+         when(gitlabClientFactory.createClient(any(), any())).thenReturn(gitlabClient);
+         when(almSettingDto.getUrl()).thenReturn("http://gitlab.dummy");
+         when(projectAlmSettingDto.getAlmRepo()).thenReturn(PROJECT_PATH);
++        when(projectAlmSettingDto.getInlineAnnotationsEnabled()).thenReturn(true);
+         when(analysisDetails.getPullRequestId()).thenReturn(Long.toString(MERGE_REQUEST_IID));
+         when(mergeRequest.getIid()).thenReturn(MERGE_REQUEST_IID);
+         when(mergeRequest.getSourceProjectId()).thenReturn(PROJECT_ID);
