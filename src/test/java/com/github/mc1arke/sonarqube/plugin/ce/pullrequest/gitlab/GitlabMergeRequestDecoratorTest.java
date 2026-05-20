@@ -112,6 +112,7 @@ class GitlabMergeRequestDecoratorTest {
         when(gitlabClientFactory.createClient(any(), any())).thenReturn(gitlabClient);
         when(almSettingDto.getUrl()).thenReturn("http://gitlab.dummy");
         when(projectAlmSettingDto.getAlmRepo()).thenReturn(PROJECT_PATH);
+        when(projectAlmSettingDto.getInlineAnnotationsEnabled()).thenReturn(true);
         when(analysisDetails.getPullRequestId()).thenReturn(Long.toString(MERGE_REQUEST_IID));
         when(mergeRequest.getIid()).thenReturn(MERGE_REQUEST_IID);
         when(mergeRequest.getSourceProjectId()).thenReturn(PROJECT_ID);
