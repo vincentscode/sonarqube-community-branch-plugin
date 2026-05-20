@@ -1,0 +1,77 @@
+name: "Sync Upstream"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 15 * * 1'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_URL: https://github.com/mc1arke/sonarqube-community-branch-plugin.git
+      OVERRIDE_PATHS: |
+        .github
+        patches
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Stash override-paths from current master
+        run: |
+          mkdir -p "$RUNNER_TEMP/overrides"
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            dest="$RUNNER_TEMP/overrides/$path"
+            mkdir -p "$(dirname "$dest")"
+            cp -r "$path" "$dest"
+            echo "Stashed: $path"
+          done <<< "$OVERRIDE_PATHS"
+
+      - name: Fetch upstream remote
+        run: |
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch upstream --tags
+
+      - name: Checkout latest upstream tag
+        run: |
+          git checkout "tags/$(git tag --sort=-version:refname --list '[0-9]*.[0-9]*.[0-9]*' | head -n 1)"
+
+      - name: Restore override-paths
+        run: |
+          if [ -d "$RUNNER_TEMP/overrides" ]; then
+            cp -r "$RUNNER_TEMP/overrides/." .
+            git add -A
+            if ! git diff --cached --quiet; then
+              git commit -m "Restore overrides"
+            fi
+          fi
+
+      - name: Apply patches
+        run: |
+          shopt -s nullglob
+          patches=(patches/*.patch)
+          IFS=$'\n' sorted=($(sort <<<"${patches[*]}")); unset IFS
+          git am --3way --ignore-whitespace "${sorted[@]}"
+
+      - name: Force-push to master
+        run: |
+          git push --force-with-lease origin "HEAD:refs/heads/master"

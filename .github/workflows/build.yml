@@ -1,4 +1,4 @@
-name: build
+name: Build
 
 on:
   push:
@@ -11,6 +11,13 @@ on:
       - '**'
     paths-ignore:
       - '**.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   prep:
@@ -115,6 +122,8 @@ jobs:
     needs: [prep, build-ui]
     if: github.event_name != 'pull_request' && needs.prep.outputs.release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       -
         name: Checkout
@@ -168,17 +177,53 @@ jobs:
           path: build/ui
       -
         name: GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         if: success()
         with:
           name: ${{ needs.prep.outputs.version }}
           tag_name: ${{ needs.prep.outputs.version }}
-          draft: true
+          draft: false
           files: |
             build/libs/*.jar
             build/ui/sonarqube-webapp.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker:
+    needs: [prep, release]
+    if: github.event_name != 'pull_request' && needs.prep.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      -
+        name: Checkout release tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prep.outputs.version }}
+          submodules: true
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      -
+        name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      -
+        name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            PLUGIN_VERSION=${{ needs.prep.outputs.version }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/sonarqube-with-community-branch-plugin:${{ needs.prep.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/sonarqube-with-community-branch-plugin:latest
 
   sonar:
     needs: prep
@@ -204,41 +249,3 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
-      -
-        name: Test and Sonar
-        if: ${{ env.SONAR_TOKEN != null }}
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            ./gradlew test sonar \
-              -Dsonar.gradle.skipCompile=true \
-              -Dsonar.pullrequest.provider=github \
-              -Dsonar.pullrequest.github.repository=${{ github.repository }} \
-              -Dsonar.host.url=https://sonarcloud.io \
-              -Dsonar.organization=${SONAR_ORG_KEY} \
-              -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-              -Dsonar.pullrequest.key=${{ github.event.number }} \
-              -Dsonar.pullrequest.base=${{ github.base_ref }}
-          elif [ "${{ needs.prep.outputs.release }}" = 'true' ]; then
-            ./gradlew test sonar \
-              -Dsonar.gradle.skipCompile=true \
-              -Dsonar.pullrequest.provider=github \
-              -Dsonar.pullrequest.github.repository=${{ github.repository }} \
-              -Dsonar.host.url=https://sonarcloud.io \
-              -Dsonar.organization=${SONAR_ORG_KEY} \
-              -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-              -Dsonar.projectVersion=${{ needs.prep.outputs.version }}
-          else
-            ./gradlew test sonar \
-              -Dsonar.gradle.skipCompile=true \
-              -Dsonar.pullrequest.provider=github \
-              -Dsonar.pullrequest.github.repository=${{ github.repository }} \
-              -Dsonar.host.url=https://sonarcloud.io \
-              -Dsonar.organization=${SONAR_ORG_KEY} \
-              -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-              -Dsonar.branch.name=${GITHUB_REF##*/}
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_ORG_KEY: ${{ secrets.SONAR_ORG_KEY }}
-          SONAR_PROJECT_KEY: ${{ secrets.SONAR_PROJECT_KEY }}
