@@ -1,0 +1,29 @@
+From a6117d1206eeb803d2ddb49d7f9fe27e439d5922 Mon Sep 17 00:00:00 2001
+From: Vincent Schmandt <vincentscode@gmail.com>
+Date: Wed, 20 May 2026 13:07:34 +0200
+Subject: Fix SetGitlabBindingActionTest
+
+diff --git a/src/test/java/com/github/mc1arke/sonarqube/plugin/server/pullrequest/ws/binding/action/SetGitlabBindingActionTest.java b/src/test/java/com/github/mc1arke/sonarqube/plugin/server/pullrequest/ws/binding/action/SetGitlabBindingActionTest.java
+index a3fe106a1..f642d6253 100644
+--- a/src/test/java/com/github/mc1arke/sonarqube/plugin/server/pullrequest/ws/binding/action/SetGitlabBindingActionTest.java
++++ b/src/test/java/com/github/mc1arke/sonarqube/plugin/server/pullrequest/ws/binding/action/SetGitlabBindingActionTest.java
+@@ -54,6 +54,11 @@ void shouldDefineActionWithRequiredParameters() {
+         WebService.NewParam monoRepoParameter = mock();
+         when(monoRepoParameter.setRequired(anyBoolean())).thenReturn(monoRepoParameter);
+         when(newAction.createParam("monorepo")).thenReturn(monoRepoParameter);
++        
++        WebService.NewParam inlineParam = mock();
++        when(inlineParam.setBooleanPossibleValues()).thenReturn(inlineParam);
++        when(inlineParam.setDefaultValue(false)).thenReturn(inlineParam);
++        when(newAction.createParam("inlineAnnotationsEnabled")).thenReturn(inlineParam);
+ 
+         SetGitlabBindingAction testCase = new SetGitlabBindingAction(dbClient, componentFinder, userSession);
+         testCase.configureAction(newAction);
+@@ -74,6 +79,7 @@ void shouldHandleRequestWithValidParameters() {
+ 
+         Request request = mock();
+         when(request.param("repository")).thenReturn("repositoryId");
++        when(request.paramAsBoolean("inlineAnnotationsEnabled")).thenReturn(false);
+ 
+         SetGitlabBindingAction testCase = new SetGitlabBindingAction(dbClient, componentFinder, userSession);
+         ProjectAlmSettingDto result = testCase.createProjectAlmSettingDto("projectUuid", "settingsUuid", true, request);
