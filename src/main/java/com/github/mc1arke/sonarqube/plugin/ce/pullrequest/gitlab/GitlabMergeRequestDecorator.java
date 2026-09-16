@@ -44,6 +44,7 @@ import org.sonar.db.alm.setting.ProjectAlmSettingDto;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 public class GitlabMergeRequestDecorator extends DiscussionAwarePullRequestDecorator<GitlabClient, MergeRequest, User, Discussion, Note> {
@@ -68,6 +69,11 @@ public class GitlabMergeRequestDecorator extends DiscussionAwarePullRequestDecor
 
     @Override
     protected boolean isInlineCommentsEnabled(ProjectAlmSettingDto projectAlmSettingDto) {
+        return Objects.requireNonNullElse(projectAlmSettingDto.getInlineAnnotationsEnabled(), false);
+    }
+
+    @Override
+    protected boolean isDiscussionCleanupEnabled(ProjectAlmSettingDto projectAlmSettingDto) {
         return true;
     }
 
