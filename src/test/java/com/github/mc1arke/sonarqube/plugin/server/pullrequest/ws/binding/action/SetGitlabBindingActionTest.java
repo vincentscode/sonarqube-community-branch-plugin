@@ -55,6 +55,11 @@ class SetGitlabBindingActionTest {
         when(monoRepoParameter.setRequired(anyBoolean())).thenReturn(monoRepoParameter);
         when(newAction.createParam("monorepo")).thenReturn(monoRepoParameter);
 
+        WebService.NewParam inlineParam = mock();
+        when(inlineParam.setBooleanPossibleValues()).thenReturn(inlineParam);
+        when(inlineParam.setDefaultValue(false)).thenReturn(inlineParam);
+        when(newAction.createParam("inlineAnnotationsEnabled")).thenReturn(inlineParam);
+
         SetGitlabBindingAction testCase = new SetGitlabBindingAction(dbClient, componentFinder, userSession);
         testCase.configureAction(newAction);
 
@@ -74,12 +79,14 @@ class SetGitlabBindingActionTest {
 
         Request request = mock();
         when(request.param("repository")).thenReturn("repositoryId");
+        when(request.paramAsBoolean("inlineAnnotationsEnabled")).thenReturn(false);
 
         SetGitlabBindingAction testCase = new SetGitlabBindingAction(dbClient, componentFinder, userSession);
         ProjectAlmSettingDto result = testCase.createProjectAlmSettingDto("projectUuid", "settingsUuid", true, request);
 
-        assertThat(result).usingRecursiveComparison().isEqualTo(new ProjectAlmSettingDto().setProjectUuid("projectUuid").setAlmSettingUuid("settingsUuid").setAlmRepo("repositoryId").setMonorepo(true));
+        assertThat(result).usingRecursiveComparison().isEqualTo(new ProjectAlmSettingDto().setProjectUuid("projectUuid").setAlmSettingUuid("settingsUuid").setAlmRepo("repositoryId").setMonorepo(true).setInlineAnnotationsEnabled(false));
         verify(request).param("repository");
+        verify(request).paramAsBoolean("inlineAnnotationsEnabled");
         verifyNoMoreInteractions(request);
     }
 }
