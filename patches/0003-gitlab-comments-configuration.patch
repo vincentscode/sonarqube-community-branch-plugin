@@ -1,0 +1,207 @@
+From 99a4aa3524f090318ddb5029d7ada584be608d97 Mon Sep 17 00:00:00 2001
+From: Vincent Schmandt <vincentscode@gmail.com>
+Date: Wed, 16 Sep 2026 15:19:30 +0200
+Subject: Add configuration for gitlab comments
+
+diff --git a/src/main/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/DiscussionAwarePullRequestDecorator.java b/src/main/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/DiscussionAwarePullRequestDecorator.java
+index d73aca0..5387503 100644
+--- a/src/main/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/DiscussionAwarePullRequestDecorator.java
++++ b/src/main/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/DiscussionAwarePullRequestDecorator.java
+@@ -73,10 +73,13 @@ public abstract class DiscussionAwarePullRequestDecorator<C, P, U, D, N> impleme
+ 
+         P pullRequest = getPullRequest(client, almSettingDto, projectAlmSettingDto, analysis);
+ 
+-        if (isInlineCommentsEnabled(projectAlmSettingDto)) {
++        boolean inlineCommentsEnabled = isInlineCommentsEnabled(projectAlmSettingDto);
++
++        if (inlineCommentsEnabled || isDiscussionCleanupEnabled(projectAlmSettingDto)) {
+             U user = getCurrentUser(client);
+ 
+-            List<PostAnalysisIssueVisitor.ComponentIssue> openSonarqubeIssues = analysis.getScmReportableIssues();
++            List<PostAnalysisIssueVisitor.ComponentIssue> openSonarqubeIssues =
++                    inlineCommentsEnabled ? analysis.getScmReportableIssues() : List.of();
+ 
+             List<Triple<D, N, Optional<ProjectIssueIdentifier>>> currentProjectSonarqubeComments = findOpenSonarqubeComments(client,
+                     pullRequest,
+@@ -89,24 +92,27 @@ public abstract class DiscussionAwarePullRequestDecorator<C, P, U, D, N> impleme
+                     user,
+                     currentProjectSonarqubeComments,
+                     openSonarqubeIssues,
+-                    pullRequest);
+-
+-            List<String> commitIds = getCommitIdsForPullRequest(client, pullRequest);
+-            List<Pair<PostAnalysisIssueVisitor.ComponentIssue, String>> uncommentedIssues = findIssuesWithoutComments(openSonarqubeIssues,
+-                    commentKeysForOpenComments)
+-                    .stream()
+-                    .map(DiscussionAwarePullRequestDecorator::loadScmPathsForIssues)
+-                    .filter(Optional::isPresent)
+-                    .map(Optional::get)
+-                    .filter(issue -> isIssueFromCommitInCurrentRequest(issue.getLeft(), commitIds, scmInfoRepository))
+-                    .toList();
+-
+-            uncommentedIssues.forEach(issue -> submitCommitNoteForIssue(client,
+                     pullRequest,
+-                    issue.getLeft(),
+-                    issue.getRight(),
+-                    analysis,
+-                    reportGenerator.createAnalysisIssueSummary(issue.getLeft(), analysis)));
++                    inlineCommentsEnabled);
++
++            if (inlineCommentsEnabled) {
++                List<String> commitIds = getCommitIdsForPullRequest(client, pullRequest);
++                List<Pair<PostAnalysisIssueVisitor.ComponentIssue, String>> uncommentedIssues = findIssuesWithoutComments(openSonarqubeIssues,
++                        commentKeysForOpenComments)
++                        .stream()
++                        .map(DiscussionAwarePullRequestDecorator::loadScmPathsForIssues)
++                        .filter(Optional::isPresent)
++                        .map(Optional::get)
++                        .filter(issue -> isIssueFromCommitInCurrentRequest(issue.getLeft(), commitIds, scmInfoRepository))
++                        .toList();
++
++                uncommentedIssues.forEach(issue -> submitCommitNoteForIssue(client,
++                        pullRequest,
++                        issue.getLeft(),
++                        issue.getRight(),
++                        analysis,
++                        reportGenerator.createAnalysisIssueSummary(issue.getLeft(), analysis)));
++            }
+         }
+ 
+         AnalysisSummary analysisSummary = reportGenerator.createAnalysisSummary(analysis);
+@@ -120,6 +126,10 @@ public abstract class DiscussionAwarePullRequestDecorator<C, P, U, D, N> impleme
+ 
+     protected abstract boolean isInlineCommentsEnabled(ProjectAlmSettingDto projectAlmSettingDto);
+ 
++    protected boolean isDiscussionCleanupEnabled(ProjectAlmSettingDto projectAlmSettingDto) {
++        return isInlineCommentsEnabled(projectAlmSettingDto);
++    }
++
+     protected abstract C createClient(AlmSettingDto almSettingDto, ProjectAlmSettingDto projectAlmSettingDto);
+ 
+     protected abstract Optional<String> createFrontEndUrl(P pullRequest, AnalysisDetails analysisDetails);
+@@ -202,7 +212,8 @@ public abstract class DiscussionAwarePullRequestDecorator<C, P, U, D, N> impleme
+     private List<String> closeOldDiscussionsAndExtractRemainingKeys(C client, U currentUser,
+                                                                     List<Triple<D, N, Optional<ProjectIssueIdentifier>>> openSonarqubeComments,
+                                                                     List<PostAnalysisIssueVisitor.ComponentIssue> openIssues,
+-                                                                    P pullRequest) {
++                                                                    P pullRequest,
++                                                                    boolean inlineCommentsEnabled) {
+         List<String> openIssueKeys = openIssues.stream()
+                 .map(issue -> issue.getIssue().key())
+                 .toList();
+@@ -219,6 +230,8 @@ public abstract class DiscussionAwarePullRequestDecorator<C, P, U, D, N> impleme
+             String issueKey = noteIdentifier.get().getIssueKey();
+             if (DECORATOR_SUMMARY_COMMENT.equals(issueKey)) {
+                 deleteOrPlaceFinalCommentOnDiscussion(client, currentUser, discussion, pullRequest);
++            } else if (!inlineCommentsEnabled) {
++                continue;
+             } else if (!openIssueKeys.contains(issueKey)) {
+                 resolveOrPlaceFinalCommentOnDiscussion(client, currentUser, discussion, pullRequest);
+             } else {
+diff --git a/src/main/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecorator.java b/src/main/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecorator.java
+index c002088..83bf4cd 100644
+--- a/src/main/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecorator.java
++++ b/src/main/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecorator.java
+@@ -44,6 +44,7 @@ import org.sonar.db.alm.setting.ProjectAlmSettingDto;
+ import java.io.IOException;
+ import java.util.Collections;
+ import java.util.List;
++import java.util.Objects;
+ import java.util.Optional;
+ 
+ public class GitlabMergeRequestDecorator extends DiscussionAwarePullRequestDecorator<GitlabClient, MergeRequest, User, Discussion, Note> {
+@@ -68,6 +69,11 @@ public class GitlabMergeRequestDecorator extends DiscussionAwarePullRequestDecor
+ 
+     @Override
+     protected boolean isInlineCommentsEnabled(ProjectAlmSettingDto projectAlmSettingDto) {
++        return Objects.requireNonNullElse(projectAlmSettingDto.getInlineAnnotationsEnabled(), false);
++    }
++
++    @Override
++    protected boolean isDiscussionCleanupEnabled(ProjectAlmSettingDto projectAlmSettingDto) {
+         return true;
+     }
+ 
+diff --git a/src/main/java/com/github/mc1arke/sonarqube/plugin/server/pullrequest/ws/binding/action/SetGitlabBindingAction.java b/src/main/java/com/github/mc1arke/sonarqube/plugin/server/pullrequest/ws/binding/action/SetGitlabBindingAction.java
+index edfdc8d..950318d 100644
+--- a/src/main/java/com/github/mc1arke/sonarqube/plugin/server/pullrequest/ws/binding/action/SetGitlabBindingAction.java
++++ b/src/main/java/com/github/mc1arke/sonarqube/plugin/server/pullrequest/ws/binding/action/SetGitlabBindingAction.java
+@@ -18,6 +18,8 @@
+  */
+ package com.github.mc1arke.sonarqube.plugin.server.pullrequest.ws.binding.action;
+ 
++import java.util.Objects;
++
+ import org.sonar.api.server.ws.Request;
+ import org.sonar.api.server.ws.WebService;
+ import org.sonar.db.DbClient;
+@@ -27,6 +29,7 @@ import org.sonar.server.user.UserSession;
+ 
+ public class SetGitlabBindingAction extends SetBindingAction {
+     private static final String REPOSITORY_PARAMETER = "repository";
++    private static final String INLINE_ANNOTATIONS_ENABLED_PARAMETER = "inlineAnnotationsEnabled";
+ 
+     public SetGitlabBindingAction(DbClient dbClient, ComponentFinder componentFinder, UserSession userSession) {
+         super(dbClient, componentFinder, userSession, "set_gitlab_binding");
+@@ -36,6 +39,7 @@ public class SetGitlabBindingAction extends SetBindingAction {
+     protected void configureAction(WebService.NewAction action) {
+         super.configureAction(action);
+         action.createParam(REPOSITORY_PARAMETER);
++        action.createParam(INLINE_ANNOTATIONS_ENABLED_PARAMETER).setBooleanPossibleValues().setDefaultValue(false);
+     }
+ 
+     @Override
+@@ -45,7 +49,8 @@ public class SetGitlabBindingAction extends SetBindingAction {
+                 .setProjectUuid(projectUuid)
+                 .setAlmSettingUuid(settingsUuid)
+                 .setAlmRepo(request.param(REPOSITORY_PARAMETER))
+-                .setMonorepo(monoRepo);
++                .setMonorepo(monoRepo)
++                .setInlineAnnotationsEnabled(Objects.requireNonNullElse(request.paramAsBoolean(INLINE_ANNOTATIONS_ENABLED_PARAMETER), false));
+     }
+ 
+ }
+diff --git a/src/test/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecoratorTest.java b/src/test/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecoratorTest.java
+index 12c780d..92e69fb 100644
+--- a/src/test/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecoratorTest.java
++++ b/src/test/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecoratorTest.java
+@@ -112,6 +112,7 @@ class GitlabMergeRequestDecoratorTest {
+         when(gitlabClientFactory.createClient(any(), any())).thenReturn(gitlabClient);
+         when(almSettingDto.getUrl()).thenReturn("http://gitlab.dummy");
+         when(projectAlmSettingDto.getAlmRepo()).thenReturn(PROJECT_PATH);
++        when(projectAlmSettingDto.getInlineAnnotationsEnabled()).thenReturn(true);
+         when(analysisDetails.getPullRequestId()).thenReturn(Long.toString(MERGE_REQUEST_IID));
+         when(mergeRequest.getIid()).thenReturn(MERGE_REQUEST_IID);
+         when(mergeRequest.getSourceProjectId()).thenReturn(PROJECT_ID);
+diff --git a/src/test/java/com/github/mc1arke/sonarqube/plugin/server/pullrequest/ws/binding/action/SetGitlabBindingActionTest.java b/src/test/java/com/github/mc1arke/sonarqube/plugin/server/pullrequest/ws/binding/action/SetGitlabBindingActionTest.java
+index a3fe106..df23b33 100644
+--- a/src/test/java/com/github/mc1arke/sonarqube/plugin/server/pullrequest/ws/binding/action/SetGitlabBindingActionTest.java
++++ b/src/test/java/com/github/mc1arke/sonarqube/plugin/server/pullrequest/ws/binding/action/SetGitlabBindingActionTest.java
+@@ -55,6 +55,11 @@ class SetGitlabBindingActionTest {
+         when(monoRepoParameter.setRequired(anyBoolean())).thenReturn(monoRepoParameter);
+         when(newAction.createParam("monorepo")).thenReturn(monoRepoParameter);
+ 
++        WebService.NewParam inlineParam = mock();
++        when(inlineParam.setBooleanPossibleValues()).thenReturn(inlineParam);
++        when(inlineParam.setDefaultValue(false)).thenReturn(inlineParam);
++        when(newAction.createParam("inlineAnnotationsEnabled")).thenReturn(inlineParam);
++
+         SetGitlabBindingAction testCase = new SetGitlabBindingAction(dbClient, componentFinder, userSession);
+         testCase.configureAction(newAction);
+ 
+@@ -74,12 +79,14 @@ class SetGitlabBindingActionTest {
+ 
+         Request request = mock();
+         when(request.param("repository")).thenReturn("repositoryId");
++        when(request.paramAsBoolean("inlineAnnotationsEnabled")).thenReturn(false);
+ 
+         SetGitlabBindingAction testCase = new SetGitlabBindingAction(dbClient, componentFinder, userSession);
+         ProjectAlmSettingDto result = testCase.createProjectAlmSettingDto("projectUuid", "settingsUuid", true, request);
+ 
+-        assertThat(result).usingRecursiveComparison().isEqualTo(new ProjectAlmSettingDto().setProjectUuid("projectUuid").setAlmSettingUuid("settingsUuid").setAlmRepo("repositoryId").setMonorepo(true));
++        assertThat(result).usingRecursiveComparison().isEqualTo(new ProjectAlmSettingDto().setProjectUuid("projectUuid").setAlmSettingUuid("settingsUuid").setAlmRepo("repositoryId").setMonorepo(true).setInlineAnnotationsEnabled(false));
+         verify(request).param("repository");
++        verify(request).paramAsBoolean("inlineAnnotationsEnabled");
+         verifyNoMoreInteractions(request);
+     }
+ }
