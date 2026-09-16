@@ -73,10 +73,13 @@ public abstract class DiscussionAwarePullRequestDecorator<C, P, U, D, N> impleme
 
         P pullRequest = getPullRequest(client, almSettingDto, projectAlmSettingDto, analysis);
 
-        if (isInlineCommentsEnabled(projectAlmSettingDto)) {
+        boolean inlineCommentsEnabled = isInlineCommentsEnabled(projectAlmSettingDto);
+
+        if (inlineCommentsEnabled || isDiscussionCleanupEnabled(projectAlmSettingDto)) {
             U user = getCurrentUser(client);
 
-            List<PostAnalysisIssueVisitor.ComponentIssue> openSonarqubeIssues = analysis.getScmReportableIssues();
+            List<PostAnalysisIssueVisitor.ComponentIssue> openSonarqubeIssues =
+                    inlineCommentsEnabled ? analysis.getScmReportableIssues() : List.of();
 
             List<Triple<D, N, Optional<ProjectIssueIdentifier>>> currentProjectSonarqubeComments = findOpenSonarqubeComments(client,
                     pullRequest,
@@ -89,24 +92,27 @@ public abstract class DiscussionAwarePullRequestDecorator<C, P, U, D, N> impleme
                     user,
                     currentProjectSonarqubeComments,
                     openSonarqubeIssues,
-                    pullRequest);
-
-            List<String> commitIds = getCommitIdsForPullRequest(client, pullRequest);
-            List<Pair<PostAnalysisIssueVisitor.ComponentIssue, String>> uncommentedIssues = findIssuesWithoutComments(openSonarqubeIssues,
-                    commentKeysForOpenComments)
-                    .stream()
-                    .map(DiscussionAwarePullRequestDecorator::loadScmPathsForIssues)
-                    .filter(Optional::isPresent)
-                    .map(Optional::get)
-                    .filter(issue -> isIssueFromCommitInCurrentRequest(issue.getLeft(), commitIds, scmInfoRepository))
-                    .toList();
-
-            uncommentedIssues.forEach(issue -> submitCommitNoteForIssue(client,
                     pullRequest,
-                    issue.getLeft(),
-                    issue.getRight(),
-                    analysis,
-                    reportGenerator.createAnalysisIssueSummary(issue.getLeft(), analysis)));
+                    inlineCommentsEnabled);
+
+            if (inlineCommentsEnabled) {
+                List<String> commitIds = getCommitIdsForPullRequest(client, pullRequest);
+                List<Pair<PostAnalysisIssueVisitor.ComponentIssue, String>> uncommentedIssues = findIssuesWithoutComments(openSonarqubeIssues,
+                        commentKeysForOpenComments)
+                        .stream()
+                        .map(DiscussionAwarePullRequestDecorator::loadScmPathsForIssues)
+                        .filter(Optional::isPresent)
+                        .map(Optional::get)
+                        .filter(issue -> isIssueFromCommitInCurrentRequest(issue.getLeft(), commitIds, scmInfoRepository))
+                        .toList();
+
+                uncommentedIssues.forEach(issue -> submitCommitNoteForIssue(client,
+                        pullRequest,
+                        issue.getLeft(),
+                        issue.getRight(),
+                        analysis,
+                        reportGenerator.createAnalysisIssueSummary(issue.getLeft(), analysis)));
+            }
         }
 
         AnalysisSummary analysisSummary = reportGenerator.createAnalysisSummary(analysis);
@@ -119,6 +125,10 @@ public abstract class DiscussionAwarePullRequestDecorator<C, P, U, D, N> impleme
     }
 
     protected abstract boolean isInlineCommentsEnabled(ProjectAlmSettingDto projectAlmSettingDto);
+
+    protected boolean isDiscussionCleanupEnabled(ProjectAlmSettingDto projectAlmSettingDto) {
+        return isInlineCommentsEnabled(projectAlmSettingDto);
+    }
 
     protected abstract C createClient(AlmSettingDto almSettingDto, ProjectAlmSettingDto projectAlmSettingDto);
 
@@ -202,7 +212,8 @@ public abstract class DiscussionAwarePullRequestDecorator<C, P, U, D, N> impleme
     private List<String> closeOldDiscussionsAndExtractRemainingKeys(C client, U currentUser,
                                                                     List<Triple<D, N, Optional<ProjectIssueIdentifier>>> openSonarqubeComments,
                                                                     List<PostAnalysisIssueVisitor.ComponentIssue> openIssues,
-                                                                    P pullRequest) {
+                                                                    P pullRequest,
+                                                                    boolean inlineCommentsEnabled) {
         List<String> openIssueKeys = openIssues.stream()
                 .map(issue -> issue.getIssue().key())
                 .toList();
@@ -219,6 +230,8 @@ public abstract class DiscussionAwarePullRequestDecorator<C, P, U, D, N> impleme
             String issueKey = noteIdentifier.get().getIssueKey();
             if (DECORATOR_SUMMARY_COMMENT.equals(issueKey)) {
                 deleteOrPlaceFinalCommentOnDiscussion(client, currentUser, discussion, pullRequest);
+            } else if (!inlineCommentsEnabled) {
+                continue;
             } else if (!openIssueKeys.contains(issueKey)) {
                 resolveOrPlaceFinalCommentOnDiscussion(client, currentUser, discussion, pullRequest);
             } else {
