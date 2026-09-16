@@ -1,0 +1,171 @@
+From 5146f985ac1360f4628e3c1ccbecc4ec44b4e487 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Marcel=20St=C3=B6r?= <marcelstoer@users.noreply.github.com>
+Date: Tue, 15 Sep 2026 16:18:26 +0200
+Subject: [PATCH] Fix summary comments never being deleted on resolved GitLab
+ discussions
+
+GitlabMergeRequestDecorator.submitSummaryNote resolves the summary
+discussion itself whenever the Quality Gate passes. Since #997's
+isSummaryComment exception was removed in 0b17645 to stop the
+"outdated" note being reposted, resolved summary discussions were
+excluded from cleanup entirely, so a new summary comment piled up on
+every green analysis instead of replacing the old one.
+
+Restore the isSummaryComment check so resolved summary discussions
+stay reachable for cleanup, and guard
+deleteOrPlaceFinalCommentOnDiscussion against re-adding the "outdated"
+note when it's already present, so the original repost bug fixed by
+0b17645 doesn't come back.
+---
+ .../DiscussionAwarePullRequestDecorator.java  | 20 ++++-
+ .../GitlabMergeRequestDecoratorTest.java      | 85 +++++++++++++++++++
+ 2 files changed, 103 insertions(+), 2 deletions(-)
+
+diff --git a/src/main/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/DiscussionAwarePullRequestDecorator.java b/src/main/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/DiscussionAwarePullRequestDecorator.java
+index c553b8cd..d73aca09 100644
+--- a/src/main/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/DiscussionAwarePullRequestDecorator.java
++++ b/src/main/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/DiscussionAwarePullRequestDecorator.java
+@@ -70,7 +70,7 @@ protected DiscussionAwarePullRequestDecorator(ScmInfoRepository scmInfoRepositor
+     public DecorationResult decorateQualityGateStatus(AnalysisDetails analysis, AlmSettingDto almSettingDto,
+                                                       ProjectAlmSettingDto projectAlmSettingDto) {
+         C client = createClient(almSettingDto, projectAlmSettingDto);
+-        
++
+         P pullRequest = getPullRequest(client, almSettingDto, projectAlmSettingDto, analysis);
+ 
+         if (isInlineCommentsEnabled(projectAlmSettingDto)) {
+@@ -191,7 +191,7 @@ private List<Triple<D, N, Optional<ProjectIssueIdentifier>>> findOpenSonarqubeCo
+                     return commentsForDiscussion.stream()
+                         .findFirst()
+                         .filter(note -> isNoteFromCurrentUser(note, currentUser))
+-                        .filter(note -> !isResolved(client, discussion, commentsForDiscussion, currentUser))
++                        .filter(note -> !isResolved(client, discussion, commentsForDiscussion, currentUser) || isSummaryComment(client, note))
+                         .map(note -> new ImmutableTriple<>(discussion, note, parseIssueDetails(client, note)));
+                 })
+                 .filter(Optional::isPresent)
+@@ -236,6 +236,12 @@ private boolean isResolved(C client, D discussion, List<N> notesInDiscussion, U
+                 .anyMatch(content -> RESOLVED_ISSUE_NEEDING_CLOSED_MESSAGE.equals(content) || RESOLVED_SUMMARY_NEEDING_CLOSED_MESSAGE.equals(content));
+     }
+ 
++    private boolean isSummaryComment(C client, N note) {
++        return parseIssueDetails(client, note)
++                .map(identifier -> DECORATOR_SUMMARY_COMMENT.equals(identifier.getIssueKey()))
++                .orElse(false);
++    }
++
+     private void resolveOrPlaceFinalCommentOnDiscussion(C client, U currentUser, D discussion, P pullRequest) {
+         if (getNotesForDiscussion(client, discussion).stream()
+                 .filter(this::isUserNote)
+@@ -249,6 +255,16 @@ private void resolveOrPlaceFinalCommentOnDiscussion(C client, U currentUser, D d
+ 
+     private void deleteOrPlaceFinalCommentOnDiscussion(C client, U currentUser, D discussion, P pullRequest) {
+         List<N> notesForDiscussion = getNotesForDiscussion(client, discussion);
++        boolean outdatedMessageAlreadyPresent = notesForDiscussion.stream()
++                .filter(this::isUserNote)
++                .filter(note -> isNoteFromCurrentUser(note, currentUser))
++                .map(note -> getNoteContent(client, note))
++                .anyMatch(RESOLVED_SUMMARY_NEEDING_CLOSED_MESSAGE::equals);
++
++        if (outdatedMessageAlreadyPresent) {
++            return;
++        }
++
+         if (notesForDiscussion.stream()
+             .filter(this::isUserNote)
+             .anyMatch(note -> !isNoteFromCurrentUser(note, currentUser))) {
+diff --git a/src/test/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecoratorTest.java b/src/test/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecoratorTest.java
+index a2e8d5fb..12c780d0 100644
+--- a/src/test/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecoratorTest.java
++++ b/src/test/java/com/github/mc1arke/sonarqube/plugin/ce/pullrequest/gitlab/GitlabMergeRequestDecoratorTest.java
+@@ -809,6 +809,91 @@ void shouldNotAddNoteToSummaryCommentThreadIfOtherCommentsInDiscussionAndNoteAlr
+         verify(gitlabClient).getMergeRequestDiscussions(PROJECT_ID, MERGE_REQUEST_IID);
+     }
+ 
++    @Test
++    void shouldDeleteResolvedSummaryCommentIfNoOtherCommentsInDiscussion() throws IOException {
++        Note note = mock();
++        when(note.getId()).thenReturn(101L);
++        when(note.getAuthor()).thenReturn(sonarqubeUser);
++        when(note.getBody()).thenReturn("Summary comment" + System.lineSeparator() + "[View in SonarQube](http://host.domain/dashboard?id=projectKey&pullRequest=123)");
++        when(note.isSystem()).thenReturn(false);
++        when(note.isResolved()).thenReturn(true);
++
++        Discussion discussion = mock();
++        when(discussion.getId()).thenReturn("discussionId");
++        when(discussion.getNotes()).thenReturn(Collections.singletonList(note));
++
++        when(gitlabClient.getMergeRequestDiscussions(anyLong(), anyLong())).thenReturn(Collections.singletonList(discussion));
++
++        underTest.decorateQualityGateStatus(analysisDetails, almSettingDto, projectAlmSettingDto);
++
++        verify(gitlabClient).deleteMergeRequestDiscussionNote(PROJECT_ID, MERGE_REQUEST_IID, "discussionId", 101);
++        verify(gitlabClient, never()).addMergeRequestDiscussionNote(anyLong(), anyLong(), any(), any());
++    }
++
++    @Test
++    void shouldAddNoteToResolvedSummaryCommentThreadIfOtherCommentsInDiscussion() throws IOException {
++        Note note = mock();
++        when(note.getId()).thenReturn(101L);
++        when(note.getAuthor()).thenReturn(sonarqubeUser);
++        when(note.getBody()).thenReturn("Summary comment" + System.lineSeparator() + "[View in SonarQube](http://host.domain/dashboard?id=projectKey&pullRequest=123)");
++        when(note.isSystem()).thenReturn(false);
++        when(note.isResolved()).thenReturn(true);
++
++        User otherUser = mock();
++        when(otherUser.getUsername()).thenReturn("username");
++        Note note2 = mock();
++        when(note2.getId()).thenReturn(102L);
++        when(note2.getAuthor()).thenReturn(otherUser);
++        when(note2.getBody()).thenReturn("Another comment");
++        when(note2.isSystem()).thenReturn(false);
++
++        Discussion discussion = mock();
++        when(discussion.getId()).thenReturn("discussionId");
++        when(discussion.getNotes()).thenReturn(List.of(note, note2));
++
++        when(gitlabClient.getMergeRequestDiscussions(anyLong(), anyLong())).thenReturn(Collections.singletonList(discussion));
++
++        underTest.decorateQualityGateStatus(analysisDetails, almSettingDto, projectAlmSettingDto);
++
++        verify(gitlabClient).addMergeRequestDiscussionNote(PROJECT_ID, MERGE_REQUEST_IID, "discussionId", "This summary note is outdated, but due to other comments being present in this discussion, the discussion is not being removed. Please manually resolve this discussion once the other comments have been reviewed.");
++        verify(gitlabClient, never()).deleteMergeRequestDiscussionNote(anyLong(), anyLong(), any(), anyLong());
++    }
++
++    @Test
++    void shouldNotRepostOutdatedNoteToResolvedSummaryCommentThreadIfAlreadyPresent() throws IOException {
++        Note note = mock();
++        when(note.getId()).thenReturn(101L);
++        when(note.getAuthor()).thenReturn(sonarqubeUser);
++        when(note.getBody()).thenReturn("Summary comment" + System.lineSeparator() + "[View in SonarQube](http://host.domain/dashboard?id=projectKey&pullRequest=123)");
++        when(note.isSystem()).thenReturn(false);
++        when(note.isResolved()).thenReturn(true);
++
++        User otherUser = mock();
++        when(otherUser.getUsername()).thenReturn("username");
++        Note note2 = mock();
++        when(note2.getId()).thenReturn(102L);
++        when(note2.getAuthor()).thenReturn(otherUser);
++        when(note2.getBody()).thenReturn("Another comment");
++        when(note2.isSystem()).thenReturn(false);
++
++        Note note3 = mock();
++        when(note3.getId()).thenReturn(103L);
++        when(note3.getAuthor()).thenReturn(sonarqubeUser);
++        when(note3.getBody()).thenReturn("This summary note is outdated, but due to other comments being present in this discussion, the discussion is not being removed. Please manually resolve this discussion once the other comments have been reviewed.");
++        when(note3.isSystem()).thenReturn(false);
++
++        Discussion discussion = mock();
++        when(discussion.getId()).thenReturn("discussionId");
++        when(discussion.getNotes()).thenReturn(List.of(note, note2, note3));
++
++        when(gitlabClient.getMergeRequestDiscussions(anyLong(), anyLong())).thenReturn(Collections.singletonList(discussion));
++
++        underTest.decorateQualityGateStatus(analysisDetails, almSettingDto, projectAlmSettingDto);
++
++        verify(gitlabClient, never()).addMergeRequestDiscussionNote(anyLong(), anyLong(), any(), any());
++        verify(gitlabClient, never()).deleteMergeRequestDiscussionNote(anyLong(), anyLong(), any(), anyLong());
++    }
++
+     @Test
+     void shouldNotTryAndCleanupNonSummaryNote() throws IOException {
+         Note note = mock();
