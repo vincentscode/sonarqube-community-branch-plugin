@@ -1,0 +1,922 @@
+From 23e78bbdb156b678fb1f2da0718fb057b9c80338 Mon Sep 17 00:00:00 2001
+From: gsaraiva2109 <gsaraiva2109@gmail.com>
+Date: Wed, 22 Jul 2026 18:39:59 -0300
+Subject: [PATCH 1/7] Add support for Sonarqube 26.7
+
+Bump plugin/build/lib versions to target SonarQube Community Build
+26.7.0.124771. Skips 26.6 since no plugin release was ever cut for it.
+
+Pins the sonarqube-webapp submodule to the sqcb-26.6.0 tag since
+SonarSource hasn't published a 26.7 webapp snapshot yet (26.7 is a
+backend-only release).
+
+Also fixes ScannerPullRequestPropertySensorTest, which no longer
+compiled: SensorContextTester/TestInputFileBuilder were removed from
+the server distribution in 26.6/26.7. Rewrote it with plain Mockito
+against SensorContext directly.
+---
+ .env                                          |  4 +-
+ build.gradle                                  |  2 +-
+ gradle.properties                             |  2 +-
+ sonarqube-webapp                              |  2 +-
+ .../ScannerPullRequestPropertySensorTest.java | 49 ++++++-------------
+ 5 files changed, 21 insertions(+), 38 deletions(-)
+
+diff --git a/.env b/.env
+index fb10a6cb7..fb54b08c8 100644
+--- a/.env
++++ b/.env
+@@ -1,8 +1,8 @@
+ # The Sonarqube base image. 'latest' if building locally, '8.5-community' if targeting a specific version
+-SONARQUBE_VERSION=26.5.0.122743-community
++SONARQUBE_VERSION=26.7.0.124771-community
+ 
+ # The name of the Dockerfile to run. 'Dockerfile' is building locally, 'release.Dockerfile' if building the release image
+ DOCKERFILE=Dockerfile
+ 
+ # The version of the plugin to include in the image
+-PLUGIN_VERSION=26.6.0-SNAPSHOT
++PLUGIN_VERSION=26.7.0-SNAPSHOT
+diff --git a/build.gradle b/build.gradle
+index ed2dad55a..d2fe80622 100644
+--- a/build.gradle
++++ b/build.gradle
+@@ -40,7 +40,7 @@ repositories {
+     }
+ }
+ 
+-def sonarqubeVersion = '26.5.0.122743'
++def sonarqubeVersion = '26.7.0.124771'
+ def sonarqubeLibDir = "${projectDir}/sonarqube-lib"
+ def sonarLibraries = "${sonarqubeLibDir}/sonarqube-${sonarqubeVersion}/lib"
+ 
+diff --git a/gradle.properties b/gradle.properties
+index 1e0f0aba0..b52a3721c 100644
+--- a/gradle.properties
++++ b/gradle.properties
+@@ -1 +1 @@
+-version=26.6.0-SNAPSHOT
++version=26.7.0-SNAPSHOT
+diff --git a/sonarqube-webapp b/sonarqube-webapp
+index 1179dac68..782bd6d8e 160000
+--- a/sonarqube-webapp
++++ b/sonarqube-webapp
+@@ -1 +1 @@
+-Subproject commit 1179dac68430b138d10037afd87b8e7aa05bba58
++Subproject commit 782bd6d8ed9ae559e2e39622334ca1ef03d27e1a
+diff --git a/src/test/java/com/github/mc1arke/sonarqube/plugin/scanner/ScannerPullRequestPropertySensorTest.java b/src/test/java/com/github/mc1arke/sonarqube/plugin/scanner/ScannerPullRequestPropertySensorTest.java
+index 147cff1ae..6741a2eb2 100644
+--- a/src/test/java/com/github/mc1arke/sonarqube/plugin/scanner/ScannerPullRequestPropertySensorTest.java
++++ b/src/test/java/com/github/mc1arke/sonarqube/plugin/scanner/ScannerPullRequestPropertySensorTest.java
+@@ -18,65 +18,48 @@
+  */
+ package com.github.mc1arke.sonarqube.plugin.scanner;
+ 
++import com.github.mc1arke.sonarqube.plugin.ce.pullrequest.gitlab.GitlabMergeRequestDecorator;
+ import org.junit.jupiter.api.Test;
+-import org.sonar.api.batch.fs.internal.DefaultInputFile;
+-import org.sonar.api.batch.fs.internal.TestInputFileBuilder;
+-import org.sonar.api.batch.sensor.internal.SensorContextTester;
++import org.sonar.api.batch.sensor.SensorContext;
+ import org.sonar.api.utils.System2;
+ 
+-import java.io.IOException;
+-import java.nio.file.Files;
+-import java.nio.file.Path;
+-import java.util.Map;
+-
+-import static org.assertj.core.api.Assertions.assertThat;
++import static org.mockito.ArgumentMatchers.anyString;
+ import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.times;
++import static org.mockito.Mockito.verify;
+ import static org.mockito.Mockito.when;
+ 
+ class ScannerPullRequestPropertySensorTest {
+ 
+     private final System2 system2 = mock();
++    private final SensorContext context = mock();
+     private final ScannerPullRequestPropertySensor sensor = new ScannerPullRequestPropertySensor(system2);
+ 
+     @Test
+-    void testPropertySensorWithGitlabCIEnvValues() throws IOException {
+-        
+-        Path temp = Files.createTempDirectory("sensor");
+-
+-        DefaultInputFile inputFile = new TestInputFileBuilder("foo", "src/Foo.xoo").initMetadata("a\nb\nc\nd\ne\nf\ng\nh\ni\n").build();
+-        SensorContextTester context = SensorContextTester.create(temp);
+-        context.fileSystem().add(inputFile);        
+-
++    void testPropertySensorWithGitlabCIEnvValues() {
+         when(system2.envVariable("GITLAB_CI")).thenReturn("true");
+         when(system2.envVariable("CI_API_V4_URL")).thenReturn("value");
+         when(system2.envVariable("CI_PROJECT_PATH")).thenReturn("value");
+         when(system2.envVariable("CI_MERGE_REQUEST_PROJECT_URL")).thenReturn("value");
+-        when(system2.envVariable("CI_PIPELINE_ID")).thenReturn("value");        
++        when(system2.envVariable("CI_PIPELINE_ID")).thenReturn("value");
+ 
+         sensor.execute(context);
+ 
+-        Map<String, String> properties = context.getContextProperties();
+-
+-        assertThat(properties).hasSize(2);
+-    }    
++        verify(context, times(1)).addContextProperty(GitlabMergeRequestDecorator.PULLREQUEST_GITLAB_PROJECT_URL, "value");
++        verify(context, times(1)).addContextProperty(GitlabMergeRequestDecorator.PULLREQUEST_GITLAB_PIPELINE_ID, "value");
++        verify(context, times(2)).addContextProperty(anyString(), anyString());
++    }
+ 
+     @Test
+-    void testPropertySensorWithGitlabEnvValues() throws IOException {
+-        
+-        Path temp = Files.createTempDirectory("sensor");
+-
+-        DefaultInputFile inputFile = new TestInputFileBuilder("foo", "src/Foo.xoo").initMetadata("a\nb\nc\nd\ne\nf\ng\nh\ni\n").build();
+-        SensorContextTester context = SensorContextTester.create(temp);
+-        context.fileSystem().add(inputFile);        
+-
++    void testPropertySensorWithGitlabEnvValues() {
+         when(system2.envVariable("GITLAB_CI")).thenReturn("true");
+         when(system2.envVariable("CI_MERGE_REQUEST_PROJECT_URL")).thenReturn("value");
+         when(system2.envVariable("CI_PIPELINE_ID")).thenReturn("value");
+ 
+         sensor.execute(context);
+ 
+-        Map<String, String> properties = context.getContextProperties();
+-
+-        assertThat(properties).hasSize(2);
++        verify(context, times(1)).addContextProperty(GitlabMergeRequestDecorator.PULLREQUEST_GITLAB_PROJECT_URL, "value");
++        verify(context, times(1)).addContextProperty(GitlabMergeRequestDecorator.PULLREQUEST_GITLAB_PIPELINE_ID, "value");
++        verify(context, times(2)).addContextProperty(anyString(), anyString());
+     }
+ }
+
+From 13558715302628857a20e09008ff082de8541697 Mon Sep 17 00:00:00 2001
+From: gsaraiva2109 <gsaraiva2109@gmail.com>
+Date: Thu, 6 Aug 2026 19:26:56 -0300
+Subject: [PATCH 2/7] Update sonarqube-webapp submodule to sqcb-26.7.0
+
+SonarSource has now tagged a 26.7 webapp snapshot, which includes the
+QP select dropdown fix (SONAR-27859 / 2ee7b79) that was missing from
+sqcb-26.6.0. Re-point the submodule to the proper tag instead of the
+26.6 stand-in.
+---
+ sonarqube-webapp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/sonarqube-webapp b/sonarqube-webapp
+index 782bd6d8e..817db0967 160000
+--- a/sonarqube-webapp
++++ b/sonarqube-webapp
+@@ -1 +1 @@
+-Subproject commit 782bd6d8ed9ae559e2e39622334ca1ef03d27e1a
++Subproject commit 817db096715989dcbfb9a3075c147bd59a53592a
+
+From f47c931debe54f0ead79801546937ce03acf137f Mon Sep 17 00:00:00 2001
+From: gsaraiva2109 <gsaraiva2109@gmail.com>
+Date: Mon, 24 Aug 2026 13:17:38 -0300
+Subject: [PATCH 3/7] Fix Spinner import broken by sqcb-26.7.0 design-system
+ removal
+
+sqcb-26.7.0 (and 26.8.0) drop libs/sq-server-commons/src/design-system/
+components/Spinner.tsx, which BranchList, BranchPurgeSetting, and
+LifetimeInformationRenderer still imported from ~design-system,
+breaking sq-server:build. Switch them to the @sonarsource/echoes-react
+Spinner already used elsewhere in this addon (BranchNewCodeDefinition-
+SettingModal, PullRequestOverview), renaming the loading prop to
+isLoading to match its API.
+
+Verified with docker build --target webapp-builder: nx run sq-server:
+build now completes clean.
+---
+ .../src/branches/app/components/BranchPurgeSetting.tsx       | 5 +++--
+ .../branches/app/components/LifetimeInformationRenderer.tsx  | 5 +++--
+ .../src/branches/components/branch-list/BranchList.tsx       | 5 +++--
+ 3 files changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/sonarqube-webapp-addons/src/branches/app/components/BranchPurgeSetting.tsx b/sonarqube-webapp-addons/src/branches/app/components/BranchPurgeSetting.tsx
+index cbc31d199..563e6b464 100755
+--- a/sonarqube-webapp-addons/src/branches/app/components/BranchPurgeSetting.tsx
++++ b/sonarqube-webapp-addons/src/branches/app/components/BranchPurgeSetting.tsx
+@@ -18,7 +18,8 @@
+  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+  */
+ 
+-import { HelperHintIcon, Spinner } from '~design-system';
++import { Spinner } from '@sonarsource/echoes-react';
++import { HelperHintIcon } from '~design-system';
+ import { Switch } from '~adapters/components/common/Switch';
+ import { translate } from '~sq-server-commons/helpers/l10n';
+ import { useExcludeFromPurgeMutation } from '~sq-server-commons/queries/branch';
+@@ -51,7 +52,7 @@ export default function BranchPurgeSetting(props: Props) {
+         onChange={handleOnChange}
+         value={branch.excludedFromPurge}
+       />
+-      <Spinner loading={isPending} className="sw-ml-1" />
++      <Spinner isLoading={isPending} className="sw-ml-1" />
+       {isTheMainBranch && (
+         <HelpTooltip
+           className="sw-ml-1"
+diff --git a/sonarqube-webapp-addons/src/branches/app/components/LifetimeInformationRenderer.tsx b/sonarqube-webapp-addons/src/branches/app/components/LifetimeInformationRenderer.tsx
+index 90cc3ce5c..8d502dba3 100755
+--- a/sonarqube-webapp-addons/src/branches/app/components/LifetimeInformationRenderer.tsx
++++ b/sonarqube-webapp-addons/src/branches/app/components/LifetimeInformationRenderer.tsx
+@@ -18,9 +18,10 @@
+  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+  */
+ 
++import { Spinner } from '@sonarsource/echoes-react';
+ import * as React from 'react';
+ import { FormattedMessage } from 'react-intl';
+-import { Link, Spinner } from '~design-system';
++import { Link } from '~design-system';
+ import { translate } from '~sq-server-commons/helpers/l10n';
+ import { formatMeasure } from '~sq-server-commons/sonar-aligned/helpers/measures';
+ 
+@@ -34,7 +35,7 @@ function LifetimeInformationRenderer(props: LifetimeInformationRendererProps) {
+   const { branchAndPullRequestLifeTimeInDays, canAdmin, loading } = props;
+ 
+   return (
+-    <Spinner loading={loading}>
++    <Spinner isLoading={loading}>
+       {branchAndPullRequestLifeTimeInDays && (
+         <p>
+           <FormattedMessage
+diff --git a/sonarqube-webapp-addons/src/branches/components/branch-list/BranchList.tsx b/sonarqube-webapp-addons/src/branches/components/branch-list/BranchList.tsx
+index 8961d2abf..8b552e5d6 100644
+--- a/sonarqube-webapp-addons/src/branches/components/branch-list/BranchList.tsx
++++ b/sonarqube-webapp-addons/src/branches/components/branch-list/BranchList.tsx
+@@ -18,8 +18,9 @@
+  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+  */
+ 
++import { Spinner } from '@sonarsource/echoes-react';
+ import * as React from 'react';
+-import { ActionCell, ContentCell, Spinner, Table, TableRow } from '~design-system';
++import { ActionCell, ContentCell, Table, TableRow } from '~design-system';
+ import {
+   listBranchesNewCodeDefinition,
+   resetNewCodeDefinition,
+@@ -163,7 +164,7 @@ export default class BranchList extends React.PureComponent<Props, State> {
+     }
+ 
+     if (loading) {
+-      return <Spinner />;
++      return <Spinner isLoading />;
+     }
+ 
+     const header = (
+
+From 07d8aaf4c2ac009be1db82de80900a80c3a21d85 Mon Sep 17 00:00:00 2001
+From: Nacho-Larreta <nachitolarreta@gmail.com>
+Date: Sun, 30 Aug 2026 14:17:30 -0300
+Subject: [PATCH 4/7] Add SonarQube 26.8 support
+
+---
+ .dockerignore                                 |  1 +
+ .env                                          |  4 ++--
+ Dockerfile                                    |  4 +++-
+ build.gradle                                  |  6 ++---
+ docker/community-branch-entrypoint.sh         | 24 +++++++++++++++++++
+ gradle.properties                             |  2 +-
+ sonarqube-webapp                              |  2 +-
+ .../pull-requests/MeasuresCardPanel.tsx       |  3 +--
+ 8 files changed, 36 insertions(+), 10 deletions(-)
+ create mode 100644 docker/community-branch-entrypoint.sh
+
+diff --git a/.dockerignore b/.dockerignore
+index ccd79f4d9..d0d73d032 100644
+--- a/.dockerignore
++++ b/.dockerignore
+@@ -2,6 +2,7 @@
+ /build/
+ /.idea/
+ /.gradle/
++/sonarqube-lib/
+ /out/
+ 
+ # JavaScript
+diff --git a/.env b/.env
+index fb54b08c8..c9e3e3d58 100644
+--- a/.env
++++ b/.env
+@@ -1,8 +1,8 @@
+ # The Sonarqube base image. 'latest' if building locally, '8.5-community' if targeting a specific version
+-SONARQUBE_VERSION=26.7.0.124771-community
++SONARQUBE_VERSION=26.8.0.126808-community
+ 
+ # The name of the Dockerfile to run. 'Dockerfile' is building locally, 'release.Dockerfile' if building the release image
+ DOCKERFILE=Dockerfile
+ 
+ # The version of the plugin to include in the image
+-PLUGIN_VERSION=26.7.0-SNAPSHOT
++PLUGIN_VERSION=26.8.0-SNAPSHOT
+diff --git a/Dockerfile b/Dockerfile
+index b015aa4fc..65faea07c 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -24,7 +24,8 @@ FROM sonarqube:${SONARQUBE_VERSION}
+ ARG PLUGIN_VERSION
+ ARG WORKDIR
+ 
+-COPY --from=builder --chown=sonarqube:root ${WORKDIR}/build/libs/sonarqube-community-branch-plugin-*.jar /opt/sonarqube/extensions/plugins/
++COPY --from=builder --chown=sonarqube:root ${WORKDIR}/build/libs/sonarqube-community-branch-plugin-*.jar /opt/sonarqube/lib/community-branch-plugin/
++COPY --chmod=755 docker/community-branch-entrypoint.sh /opt/sonarqube/docker/community-branch-entrypoint.sh
+ 
+ RUN chmod -R 770 /opt/sonarqube/web && rm -rf /opt/sonarqube/web/*
+ COPY --from=webapp-builder --chown=sonarqube:root ${WORKDIR}/apps/sq-server/build/webapp /opt/sonarqube/web
+@@ -33,3 +34,4 @@ RUN chmod -R 550 /opt/sonarqube/web
+ ENV PLUGIN_VERSION=${PLUGIN_VERSION}
+ ENV SONAR_WEB_JAVAADDITIONALOPTS="-javaagent:/opt/sonarqube/extensions/plugins/sonarqube-community-branch-plugin-${PLUGIN_VERSION}.jar=web"
+ ENV SONAR_CE_JAVAADDITIONALOPTS="-javaagent:/opt/sonarqube/extensions/plugins/sonarqube-community-branch-plugin-${PLUGIN_VERSION}.jar=ce"
++ENTRYPOINT ["/opt/sonarqube/docker/community-branch-entrypoint.sh"]
+diff --git a/build.gradle b/build.gradle
+index d2fe80622..82a239239 100644
+--- a/build.gradle
++++ b/build.gradle
+@@ -40,12 +40,12 @@ repositories {
+     }
+ }
+ 
+-def sonarqubeVersion = '26.7.0.124771'
++def sonarqubeVersion = '26.8.0.126808'
+ def sonarqubeLibDir = "${projectDir}/sonarqube-lib"
+ def sonarLibraries = "${sonarqubeLibDir}/sonarqube-${sonarqubeVersion}/lib"
+ 
+-java.sourceCompatibility = JavaVersion.VERSION_17
+-java.targetCompatibility = JavaVersion.VERSION_17
++java.sourceCompatibility = JavaVersion.VERSION_21
++java.targetCompatibility = JavaVersion.VERSION_21
+ configurations {
+     zip
+     customTestRuntime
+diff --git a/docker/community-branch-entrypoint.sh b/docker/community-branch-entrypoint.sh
+new file mode 100644
+index 000000000..b3bfde282
+--- /dev/null
++++ b/docker/community-branch-entrypoint.sh
+@@ -0,0 +1,24 @@
++#!/bin/sh
++
++set -eu
++
++plugin_name="sonarqube-community-branch-plugin-${PLUGIN_VERSION}.jar"
++plugin_source="/opt/sonarqube/lib/community-branch-plugin/${plugin_name}"
++plugin_directory="/opt/sonarqube/extensions/plugins"
++disabled_directory="/opt/sonarqube/extensions/disabled-plugins"
++plugin_target="${plugin_directory}/${plugin_name}"
++
++mkdir -p "${plugin_directory}" "${disabled_directory}"
++
++for installed_plugin in "${plugin_directory}"/sonarqube-community-branch-plugin-*.jar; do
++  [ -f "${installed_plugin}" ] || continue
++  [ "${installed_plugin}" = "${plugin_target}" ] ||
++    mv "${installed_plugin}" "${disabled_directory}/$(basename "${installed_plugin}").disabled"
++done
++
++plugin_temporary="${plugin_target}.tmp"
++cp "${plugin_source}" "${plugin_temporary}"
++chmod 644 "${plugin_temporary}"
++mv "${plugin_temporary}" "${plugin_target}"
++
++exec /opt/sonarqube/docker/entrypoint.sh "$@"
+diff --git a/gradle.properties b/gradle.properties
+index b52a3721c..e95d77e29 100644
+--- a/gradle.properties
++++ b/gradle.properties
+@@ -1 +1 @@
+-version=26.7.0-SNAPSHOT
++version=26.8.0-SNAPSHOT
+diff --git a/sonarqube-webapp b/sonarqube-webapp
+index 817db0967..4fd451f82 160000
+--- a/sonarqube-webapp
++++ b/sonarqube-webapp
+@@ -1 +1 @@
+-Subproject commit 817db096715989dcbfb9a3075c147bd59a53592a
++Subproject commit 4fd451f8274726c768ac636ce40c34d68392fa7a
+diff --git a/sonarqube-webapp-addons/src/branches/components/pull-requests/MeasuresCardPanel.tsx b/sonarqube-webapp-addons/src/branches/components/pull-requests/MeasuresCardPanel.tsx
+index bd6cdfb59..905bd684a 100644
+--- a/sonarqube-webapp-addons/src/branches/components/pull-requests/MeasuresCardPanel.tsx
++++ b/sonarqube-webapp-addons/src/branches/components/pull-requests/MeasuresCardPanel.tsx
+@@ -34,6 +34,7 @@ import {
+   TrendUpCircleIcon
+ } from '~design-system';
+ import { PullRequest } from '~shared/types/branch-like';
++import { MeasurementType, getMeasurementMetricKey } from '~shared/helpers/overview';
+ import { MetricKey, MetricType } from '~shared/types/metrics';
+ import { getLeakValue } from '~sq-server-commons/components/measure/utils';
+ import { DEFAULT_ISSUES_QUERY } from '~sq-server-commons/components/shared/utils';
+@@ -59,10 +60,8 @@ import { IssueMeasuresCardInner } from '~sq-server-commons/components/overview/I
+ import MeasuresCardNumber from '~sq-server-commons/components/overview/MeasuresCardNumber';
+ import MeasuresCardPercent from '~sq-server-commons/components/overview/MeasuresCardPercent';
+ import {
+-  MeasurementType,
+   QGStatusEnum,
+   getConditionRequiredLabel,
+-  getMeasurementMetricKey,
+ } from '~sq-server-commons/utils/overview-utils';
+ 
+ interface Props {
+
+From d832fa15d73dc5f8b60f941b72741f892adbdb0d Mon Sep 17 00:00:00 2001
+From: Nacho-Larreta <nachitolarreta@gmail.com>
+Date: Mon, 31 Aug 2026 16:17:26 -0300
+Subject: [PATCH 5/7] Fix plugin upgrades for release images
+
+---
+ .github/workflows/build.yml                |  3 ++
+ docker/community-branch-entrypoint.sh      | 13 ++++---
+ docker/test-community-branch-entrypoint.sh | 45 ++++++++++++++++++++++
+ release.Dockerfile                         | 10 +++--
+ 4 files changed, 63 insertions(+), 8 deletions(-)
+ create mode 100755 docker/test-community-branch-entrypoint.sh
+
+diff --git a/.github/workflows/build.yml b/.github/workflows/build.yml
+index f0ba1c1af..233b4d7aa 100644
+--- a/.github/workflows/build.yml
++++ b/.github/workflows/build.yml
+@@ -65,6 +65,9 @@ jobs:
+         name: Build
+         run: |
+           ./gradlew clean build
++      -
++        name: Test Docker plugin upgrade handling
++        run: ./docker/test-community-branch-entrypoint.sh
+       -
+         name: Archive artifact
+         if: success() && matrix.java == '21'
+diff --git a/docker/community-branch-entrypoint.sh b/docker/community-branch-entrypoint.sh
+index b3bfde282..9bd79b72c 100644
+--- a/docker/community-branch-entrypoint.sh
++++ b/docker/community-branch-entrypoint.sh
+@@ -3,14 +3,17 @@
+ set -eu
+ 
+ plugin_name="sonarqube-community-branch-plugin-${PLUGIN_VERSION}.jar"
+-plugin_source="/opt/sonarqube/lib/community-branch-plugin/${plugin_name}"
+-plugin_directory="/opt/sonarqube/extensions/plugins"
+-disabled_directory="/opt/sonarqube/extensions/disabled-plugins"
++sonarqube_home="${SONARQUBE_HOME:-/opt/sonarqube}"
++plugin_source="${sonarqube_home}/lib/community-branch-plugin/${plugin_name}"
++plugin_directory="${sonarqube_home}/extensions/plugins"
++disabled_directory="${sonarqube_home}/extensions/disabled-plugins"
+ plugin_target="${plugin_directory}/${plugin_name}"
+ 
+ mkdir -p "${plugin_directory}" "${disabled_directory}"
+ 
+-for installed_plugin in "${plugin_directory}"/sonarqube-community-branch-plugin-*.jar; do
++for installed_plugin in \
++  "${plugin_directory}/sonarqube-community-branch-plugin.jar" \
++  "${plugin_directory}"/sonarqube-community-branch-plugin-*.jar; do
+   [ -f "${installed_plugin}" ] || continue
+   [ "${installed_plugin}" = "${plugin_target}" ] ||
+     mv "${installed_plugin}" "${disabled_directory}/$(basename "${installed_plugin}").disabled"
+@@ -21,4 +24,4 @@ cp "${plugin_source}" "${plugin_temporary}"
+ chmod 644 "${plugin_temporary}"
+ mv "${plugin_temporary}" "${plugin_target}"
+ 
+-exec /opt/sonarqube/docker/entrypoint.sh "$@"
++exec "${sonarqube_home}/docker/entrypoint.sh" "$@"
+diff --git a/docker/test-community-branch-entrypoint.sh b/docker/test-community-branch-entrypoint.sh
+new file mode 100755
+index 000000000..255cea631
+--- /dev/null
++++ b/docker/test-community-branch-entrypoint.sh
+@@ -0,0 +1,45 @@
++#!/bin/sh
++
++set -eu
++
++repository_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
++test_root=$(mktemp -d)
++trap 'rm -rf "${test_root}"' EXIT HUP INT TERM
++
++plugin_version="26.8.0-SNAPSHOT"
++plugin_name="sonarqube-community-branch-plugin-${plugin_version}.jar"
++plugin_source="${test_root}/lib/community-branch-plugin/${plugin_name}"
++plugin_directory="${test_root}/extensions/plugins"
++disabled_directory="${test_root}/extensions/disabled-plugins"
++
++mkdir -p "$(dirname "${plugin_source}")" "${plugin_directory}" "${test_root}/docker"
++printf '%s\n' '#!/bin/sh' 'exit 0' > "${test_root}/docker/entrypoint.sh"
++chmod +x "${test_root}/docker/entrypoint.sh"
++
++printf '%s\n' 'current plugin' > "${plugin_source}"
++printf '%s\n' 'legacy generic plugin' > "${plugin_directory}/sonarqube-community-branch-plugin.jar"
++printf '%s\n' 'legacy versioned plugin' > "${plugin_directory}/sonarqube-community-branch-plugin-26.7.0.jar"
++
++SONARQUBE_HOME="${test_root}" PLUGIN_VERSION="${plugin_version}" \
++  sh "${repository_root}/docker/community-branch-entrypoint.sh"
++
++cmp "${plugin_source}" "${plugin_directory}/${plugin_name}"
++test ! -e "${plugin_directory}/sonarqube-community-branch-plugin.jar"
++test ! -e "${plugin_directory}/sonarqube-community-branch-plugin-26.7.0.jar"
++test -f "${disabled_directory}/sonarqube-community-branch-plugin.jar.disabled"
++test -f "${disabled_directory}/sonarqube-community-branch-plugin-26.7.0.jar.disabled"
++
++# A restart refreshes the managed copy without duplicating or disabling it.
++printf '%s\n' 'current plugin after restart' > "${plugin_source}"
++SONARQUBE_HOME="${test_root}" PLUGIN_VERSION="${plugin_version}" \
++  sh "${repository_root}/docker/community-branch-entrypoint.sh"
++
++cmp "${plugin_source}" "${plugin_directory}/${plugin_name}"
++test "$(find "${plugin_directory}" -name 'sonarqube-community-branch-plugin*.jar' | wc -l | tr -d ' ')" = "1"
++
++# Both image variants must install the immutable source and use the migration entrypoint.
++for dockerfile in Dockerfile release.Dockerfile; do
++  grep -Fq '/opt/sonarqube/lib/community-branch-plugin/' "${repository_root}/${dockerfile}"
++  grep -Fq 'docker/community-branch-entrypoint.sh' "${repository_root}/${dockerfile}"
++  grep -Fq 'ENTRYPOINT ["/opt/sonarqube/docker/community-branch-entrypoint.sh"]' "${repository_root}/${dockerfile}"
++done
+diff --git a/release.Dockerfile b/release.Dockerfile
+index 2182f65e4..fb37ef5ab 100644
+--- a/release.Dockerfile
++++ b/release.Dockerfile
+@@ -15,14 +15,18 @@ RUN apk update && \
+     unzip /tmp/sonarqube-webapp.zip -d /opt/sonarqube/web
+ 
+ FROM sonarqube:${SONARQUBE_VERSION}
++ARG PLUGIN_VERSION
+ 
+ USER root
+ RUN rm -rf /opt/sonarqube/web/*
+ 
+-COPY --from=downloader --chown=sonarqube:root /tmp/sonarqube-community-branch-plugin.jar /opt/sonarqube/extensions/plugins/sonarqube-community-branch-plugin.jar
++COPY --from=downloader --chown=sonarqube:root /tmp/sonarqube-community-branch-plugin.jar /opt/sonarqube/lib/community-branch-plugin/sonarqube-community-branch-plugin-${PLUGIN_VERSION}.jar
++COPY --chmod=755 docker/community-branch-entrypoint.sh /opt/sonarqube/docker/community-branch-entrypoint.sh
+ COPY --from=downloader --chmod=550 --chown=sonarqube:root /opt/sonarqube/web /opt/sonarqube/web
+ 
+ 
+ USER sonarqube
+-ENV SONAR_WEB_JAVAADDITIONALOPTS="-javaagent:/opt/sonarqube/extensions/plugins/sonarqube-community-branch-plugin.jar=web"
+-ENV SONAR_CE_JAVAADDITIONALOPTS="-javaagent:/opt/sonarqube/extensions/plugins/sonarqube-community-branch-plugin.jar=ce"
++ENV PLUGIN_VERSION=${PLUGIN_VERSION}
++ENV SONAR_WEB_JAVAADDITIONALOPTS="-javaagent:/opt/sonarqube/extensions/plugins/sonarqube-community-branch-plugin-${PLUGIN_VERSION}.jar=web"
++ENV SONAR_CE_JAVAADDITIONALOPTS="-javaagent:/opt/sonarqube/extensions/plugins/sonarqube-community-branch-plugin-${PLUGIN_VERSION}.jar=ce"
++ENTRYPOINT ["/opt/sonarqube/docker/community-branch-entrypoint.sh"]
+
+From 332781e250e53dae2a1488189b4c97d73cae6eb7 Mon Sep 17 00:00:00 2001
+From: Adrian Eckardt <adrian@MacBookPro.bb.online.no>
+Date: Tue, 8 Sep 2026 08:43:02 +0200
+Subject: [PATCH 6/7] Add SonarQube 26.9 support
+
+---
+ .dockerignore                                 |  3 +++
+ .env                                          |  4 ++--
+ Dockerfile                                    | 16 ++++++++++------
+ build.gradle                                  |  2 +-
+ docker/test-community-branch-entrypoint.sh    |  2 +-
+ gradle.properties                             |  2 +-
+ sonarqube-webapp                              |  2 +-
+ sonarqube-webapp-addons/setup.sh              | 19 ++++++++++++++++---
+ .../app/components/BranchLikeTable.tsx        | 19 ++++++++++---------
+ .../app/components/BranchPurgeSetting.tsx     | 19 ++++++++++---------
+ .../components/branch-like/MenuItemList.tsx   | 13 ++++++-------
+ 11 files changed, 61 insertions(+), 40 deletions(-)
+
+diff --git a/.dockerignore b/.dockerignore
+index d0d73d032..0d33b3568 100644
+--- a/.dockerignore
++++ b/.dockerignore
+@@ -7,4 +7,7 @@
+ 
+ # JavaScript
+ node_modules/
++**/node_modules/
++**/.yarn/cache/
++sonarqube-webapp/apps/sq-server/build/
+ /sonarqube-webapp/libs/sq-server-addons
+diff --git a/.env b/.env
+index c9e3e3d58..e397fbdcb 100644
+--- a/.env
++++ b/.env
+@@ -1,8 +1,8 @@
+ # The Sonarqube base image. 'latest' if building locally, '8.5-community' if targeting a specific version
+-SONARQUBE_VERSION=26.8.0.126808-community
++SONARQUBE_VERSION=26.9.0.129388-community
+ 
+ # The name of the Dockerfile to run. 'Dockerfile' is building locally, 'release.Dockerfile' if building the release image
+ DOCKERFILE=Dockerfile
+ 
+ # The version of the plugin to include in the image
+-PLUGIN_VERSION=26.8.0-SNAPSHOT
++PLUGIN_VERSION=26.9.0-SNAPSHOT
+diff --git a/Dockerfile b/Dockerfile
+index 65faea07c..d7b5135dc 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -10,12 +10,15 @@ RUN gradle build -x test
+ 
+ 
+ FROM node:22.16-alpine AS webapp-builder
+-ARG WORKDIR
+ 
+-COPY ./sonarqube-webapp ${WORKDIR}
+-COPY ./sonarqube-webapp-addons ${WORKDIR}/libs/sq-server-addons
++COPY ./sonarqube-webapp /home/build/sonarqube-webapp
++COPY ./sonarqube-webapp-addons /home/build/sonarqube-webapp-addons
+ 
+-WORKDIR ${WORKDIR}
++WORKDIR /home/build
++RUN apk add --no-cache bash
++RUN ./sonarqube-webapp-addons/setup.sh
++
++WORKDIR /home/build/sonarqube-webapp
+ RUN yarn install
+ RUN yarn nx run sq-server:build
+ 
+@@ -25,10 +28,11 @@ ARG PLUGIN_VERSION
+ ARG WORKDIR
+ 
+ COPY --from=builder --chown=sonarqube:root ${WORKDIR}/build/libs/sonarqube-community-branch-plugin-*.jar /opt/sonarqube/lib/community-branch-plugin/
+-COPY --chmod=755 docker/community-branch-entrypoint.sh /opt/sonarqube/docker/community-branch-entrypoint.sh
++COPY --chown=sonarqube:root docker/community-branch-entrypoint.sh /opt/sonarqube/docker/community-branch-entrypoint.sh
++RUN chmod 755 /opt/sonarqube/docker/community-branch-entrypoint.sh
+ 
+ RUN chmod -R 770 /opt/sonarqube/web && rm -rf /opt/sonarqube/web/*
+-COPY --from=webapp-builder --chown=sonarqube:root ${WORKDIR}/apps/sq-server/build/webapp /opt/sonarqube/web
++COPY --from=webapp-builder --chown=sonarqube:root /home/build/sonarqube-webapp/apps/sq-server/build/webapp /opt/sonarqube/web
+ RUN chmod -R 550 /opt/sonarqube/web
+ 
+ ENV PLUGIN_VERSION=${PLUGIN_VERSION}
+diff --git a/build.gradle b/build.gradle
+index 82a239239..9cb627bf7 100644
+--- a/build.gradle
++++ b/build.gradle
+@@ -40,7 +40,7 @@ repositories {
+     }
+ }
+ 
+-def sonarqubeVersion = '26.8.0.126808'
++def sonarqubeVersion = '26.9.0.129388'
+ def sonarqubeLibDir = "${projectDir}/sonarqube-lib"
+ def sonarLibraries = "${sonarqubeLibDir}/sonarqube-${sonarqubeVersion}/lib"
+ 
+diff --git a/docker/test-community-branch-entrypoint.sh b/docker/test-community-branch-entrypoint.sh
+index 255cea631..70f97d930 100755
+--- a/docker/test-community-branch-entrypoint.sh
++++ b/docker/test-community-branch-entrypoint.sh
+@@ -6,7 +6,7 @@ repository_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+ test_root=$(mktemp -d)
+ trap 'rm -rf "${test_root}"' EXIT HUP INT TERM
+ 
+-plugin_version="26.8.0-SNAPSHOT"
++plugin_version="26.9.0-SNAPSHOT"
+ plugin_name="sonarqube-community-branch-plugin-${plugin_version}.jar"
+ plugin_source="${test_root}/lib/community-branch-plugin/${plugin_name}"
+ plugin_directory="${test_root}/extensions/plugins"
+diff --git a/gradle.properties b/gradle.properties
+index e95d77e29..b41e237e9 100644
+--- a/gradle.properties
++++ b/gradle.properties
+@@ -1 +1 @@
+-version=26.8.0-SNAPSHOT
++version=26.9.0-SNAPSHOT
+diff --git a/sonarqube-webapp b/sonarqube-webapp
+index 4fd451f82..245127868 160000
+--- a/sonarqube-webapp
++++ b/sonarqube-webapp
+@@ -1 +1 @@
+-Subproject commit 4fd451f8274726c768ac636ce40c34d68392fa7a
++Subproject commit 24512786873a89f29699478bb728a767ba03ac30
+diff --git a/sonarqube-webapp-addons/setup.sh b/sonarqube-webapp-addons/setup.sh
+index cf6626031..b618e7681 100755
+--- a/sonarqube-webapp-addons/setup.sh
++++ b/sonarqube-webapp-addons/setup.sh
+@@ -3,6 +3,8 @@
+ set -Eeuo pipefail
+ 
+ CURRENT_DIR=$(pwd)
++WEBAPP_DIR=${1:-"${CURRENT_DIR}/sonarqube-webapp"}
++ADDONS_DIR=${2:-"${CURRENT_DIR}/sonarqube-webapp-addons"}
+ 
+ function override_vite_config() {
+     if [[ -f ./vite.config.src.ts ]]; then
+@@ -12,18 +14,29 @@ function override_vite_config() {
+     echo "Overriding config vite.config.base.ts"
+     mv ./vite.config.base.ts ./vite.config.src.ts
+     cat <<EOF >vite.config.base.ts
++import { resolve } from 'node:path';
+ import { baseViteConfig as config } from './vite.config.src';
+ 
+ export * from './vite.config.src';
+-export const baseViteConfig = { ...config, resolve: { preserveSymlinks: true } };
++export const baseViteConfig = {
++  ...config,
++  resolve: {
++    ...config.resolve,
++    preserveSymlinks: true,
++    alias: {
++      ...config.resolve?.alias,
++      '~sq-server-commons': resolve(__dirname, 'libs/sq-server-commons/src'),
++    },
++  },
++};
+ EOF
+ }
+ 
+ function main() {
+-    cd ./sonarqube-webapp
++    cd "${WEBAPP_DIR}"
+     echo "Creating symlink for sonarqube-webapp/libs/sq-server-addons"
+     rm -rf ./libs/sq-server-addons
+-    ln -s "${CURRENT_DIR}/sonarqube-webapp-addons" ./libs/sq-server-addons
++    ln -s "${ADDONS_DIR}" ./libs/sq-server-addons
+     override_vite_config
+ }
+ 
+diff --git a/sonarqube-webapp-addons/src/branches/app/components/BranchLikeTable.tsx b/sonarqube-webapp-addons/src/branches/app/components/BranchLikeTable.tsx
+index 5d92cb4d0..afc8ed015 100755
+--- a/sonarqube-webapp-addons/src/branches/app/components/BranchLikeTable.tsx
++++ b/sonarqube-webapp-addons/src/branches/app/components/BranchLikeTable.tsx
+@@ -20,9 +20,9 @@
+ 
+ import * as React from 'react';
+ import { ActionCell, ContentCell, HelperHintIcon, Table, TableRow } from '~design-system';
++import Tooltip from '~sq-server-commons/components/controls/Tooltip';
+ import { getBranchLikeKey } from '~sq-server-commons/helpers/branch-like';
+ import { translate } from '~sq-server-commons/helpers/l10n';
+-import HelpTooltip from '~sq-server-commons/sonar-aligned/components/controls/HelpTooltip';
+ import { BranchLike } from '~sq-server-commons/types/branch-like';
+ import { Component } from '~sq-server-commons/types/types';
+ import BranchLikeRow from './BranchLikeRow';
+@@ -54,14 +54,15 @@ function BranchLikeTable(props: BranchLikeTableProps) {
+             <span>
+               {translate('project_branch_pull_request.branch.auto_deletion.keep_when_inactive')}
+             </span>
+-            <HelpTooltip
+-              className="sw-ml-1"
+-              overlay={translate(
+-                'project_branch_pull_request.branch.auto_deletion.keep_when_inactive.tooltip',
+-              )}
+-            >
+-              <HelperHintIcon />
+-            </HelpTooltip>
++            <span className="sw-ml-1">
++              <Tooltip
++                content={translate(
++                  'project_branch_pull_request.branch.auto_deletion.keep_when_inactive.tooltip',
++                )}
++              >
++                <HelperHintIcon />
++              </Tooltip>
++            </span>
+           </div>
+         </ContentCell>
+       )}
+diff --git a/sonarqube-webapp-addons/src/branches/app/components/BranchPurgeSetting.tsx b/sonarqube-webapp-addons/src/branches/app/components/BranchPurgeSetting.tsx
+index 563e6b464..477b1a3aa 100755
+--- a/sonarqube-webapp-addons/src/branches/app/components/BranchPurgeSetting.tsx
++++ b/sonarqube-webapp-addons/src/branches/app/components/BranchPurgeSetting.tsx
+@@ -21,9 +21,9 @@
+ import { Spinner } from '@sonarsource/echoes-react';
+ import { HelperHintIcon } from '~design-system';
+ import { Switch } from '~adapters/components/common/Switch';
++import Tooltip from '~sq-server-commons/components/controls/Tooltip';
+ import { translate } from '~sq-server-commons/helpers/l10n';
+ import { useExcludeFromPurgeMutation } from '~sq-server-commons/queries/branch';
+-import HelpTooltip from '~sq-server-commons/sonar-aligned/components/controls/HelpTooltip';
+ import { isMainBranch } from '~shared/helpers/branch-like';
+ import { Branch } from '~sq-server-commons/types/branch-like';
+ import { Component } from '~sq-server-commons/types/types';
+@@ -54,14 +54,15 @@ export default function BranchPurgeSetting(props: Props) {
+       />
+       <Spinner isLoading={isPending} className="sw-ml-1" />
+       {isTheMainBranch && (
+-        <HelpTooltip
+-          className="sw-ml-1"
+-          overlay={translate(
+-            'project_branch_pull_request.branch.auto_deletion.main_branch_tooltip',
+-          )}
+-        >
+-          <HelperHintIcon aria-label={translate('help')} />
+-        </HelpTooltip>
++        <span className="sw-ml-1">
++          <Tooltip
++            content={translate(
++              'project_branch_pull_request.branch.auto_deletion.main_branch_tooltip',
++            )}
++          >
++            <HelperHintIcon aria-label={translate('help')} />
++          </Tooltip>
++        </span>
+       )}
+     </>
+   );
+diff --git a/sonarqube-webapp-addons/src/branches/components/branch-like/MenuItemList.tsx b/sonarqube-webapp-addons/src/branches/components/branch-like/MenuItemList.tsx
+index f05e3dd14..817d93ecb 100644
+--- a/sonarqube-webapp-addons/src/branches/components/branch-like/MenuItemList.tsx
++++ b/sonarqube-webapp-addons/src/branches/components/branch-like/MenuItemList.tsx
+@@ -24,7 +24,7 @@ import { HelperHintIcon, ItemDivider, ItemHeader } from '~design-system';
+ import { isDefined } from '~shared/helpers/types';
+ import { getBranchLikeKey, isSameBranchLike } from '~sq-server-commons/helpers/branch-like';
+ import { translate } from '~sq-server-commons/helpers/l10n';
+-import HelpTooltip from '~sq-server-commons/sonar-aligned/components/controls/HelpTooltip';
++import Tooltip from '~sq-server-commons/components/controls/Tooltip';
+ import { BranchLike, BranchLikeTree } from '~sq-server-commons/types/branch-like';
+ import MenuItem from './MenuItem';
+ 
+@@ -121,12 +121,11 @@ export function MenuItemList(props: MenuItemListProps) {
+           <ItemDivider aria-hidden />
+           <ItemHeader>
+             {translate('branch_like_navigation.orphan_pull_requests')}
+-            <HelpTooltip
+-              className="sw-ml-1"
+-              overlay={translate('branch_like_navigation.orphan_pull_requests.tooltip')}
+-            >
+-              <HelperHintIcon />
+-            </HelpTooltip>
++            <span className="sw-ml-1">
++              <Tooltip content={translate('branch_like_navigation.orphan_pull_requests.tooltip')}>
++                <HelperHintIcon />
++              </Tooltip>
++            </span>
+           </ItemHeader>
+           <ItemDivider aria-hidden />
+           {branchLikeTree.orphanPullRequests.map((pr) => renderItem(pr))}
+
+From a68cf75cc414a0725e54ec73d7a1ff6d51afadd7 Mon Sep 17 00:00:00 2001
+From: Adrian Eckardt <adrian@MacBookPro.bb.online.no>
+Date: Tue, 8 Sep 2026 16:37:22 +0200
+Subject: [PATCH 7/7] Fix SonarQube 26.9 entitlement addons
+
+---
+ .../src/feature-license/entitlements.ts       | 58 +++++++++++++++++++
+ sonarqube-webapp-addons/src/index.ts          |  3 +-
+ 2 files changed, 60 insertions(+), 1 deletion(-)
+ create mode 100644 sonarqube-webapp-addons/src/feature-license/entitlements.ts
+
+diff --git a/sonarqube-webapp-addons/src/feature-license/entitlements.ts b/sonarqube-webapp-addons/src/feature-license/entitlements.ts
+new file mode 100644
+index 000000000..7d8067fc8
+--- /dev/null
++++ b/sonarqube-webapp-addons/src/feature-license/entitlements.ts
+@@ -0,0 +1,58 @@
++/*
++ * SonarQube
++ * Copyright (C) 2009-2025 SonarSource Sàrl
++ * mailto:info AT sonarsource DOT com
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 3 of the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++ * Lesser General Public License for more details.
++ */
++
++import { queryOptions, useQueries } from '@tanstack/react-query';
++import { createQueryHook, StaleTime } from '~shared/queries/common';
++import {
++  combineEntitlementChecks,
++  EntitlementCheckParams,
++  notEntitled,
++} from '~shared/queries/entitlement-checks';
++import { EntitlementCheckFeatureKey } from '~shared/types/billing';
++import { PurchaseableFeature } from '~sq-server-commons/types/editions';
++
++export const useEntitlementCheckQuery = createQueryHook((params: EntitlementCheckParams) =>
++  queryOptions({
++    queryKey: ['entitlement-check', params.featureKey, params.resourceType, params.resourceId],
++    queryFn: () => Promise.resolve(notEntitled(params.featureKey)),
++    staleTime: StaleTime.LIVE,
++  }),
++);
++
++export function useEntitlementChecksQuery(featureKeys: readonly EntitlementCheckFeatureKey[]) {
++  const usableKeys = featureKeys.filter((key) => key.length > 0);
++
++  return useQueries({
++    queries: usableKeys.map((featureKey) =>
++      queryOptions({
++        queryKey: ['entitlement-check', featureKey],
++        queryFn: () => Promise.resolve(notEntitled(featureKey)),
++        staleTime: StaleTime.LIVE,
++      }),
++    ),
++    combine: combineEntitlementChecks,
++  });
++}
++
++export const usePurchasableFeature = createQueryHook((featureKey: string) =>
++  queryOptions({
++    queryKey: ['purchasable-feature', featureKey],
++    queryFn: (): Promise<PurchaseableFeature[]> => Promise.resolve([]),
++    select: (features): PurchaseableFeature | undefined =>
++      features.find((feature) => feature.featureKey === featureKey),
++    staleTime: StaleTime.NEVER,
++  }),
++);
+diff --git a/sonarqube-webapp-addons/src/index.ts b/sonarqube-webapp-addons/src/index.ts
+index 51c31658f..1d18df44e 100644
+--- a/sonarqube-webapp-addons/src/index.ts
++++ b/sonarqube-webapp-addons/src/index.ts
+@@ -1,3 +1,4 @@
+ import branches from './branches';
++import * as entitlements from './feature-license/entitlements';
+ 
+-export const addons = { branches };
++export const addons = { branches, entitlements };
